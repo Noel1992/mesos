@@ -151,6 +151,7 @@ struct StatusUpdateStream
                      const Option<ContainerID>& containerId)
     : checkpoint(_checkpoint),
       terminated(false),
+      retries(0),
       taskId(_taskId),
       frameworkId(_frameworkId),
       slaveId(_slaveId),
@@ -323,6 +324,7 @@ struct StatusUpdateStream
   bool terminated;
   Option<process::Timeout> timeout; // Timeout for resending status update.
   std::queue<StatusUpdate> pending;
+  int retries;
 
 private:
   // Handles the status update and writes it to disk, if necessary.

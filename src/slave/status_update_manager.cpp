@@ -462,6 +462,7 @@ Future<bool> StatusUpdateManagerProcess::acknowledgement(
   return !terminated;
 }
 
+static const int MAX_RETRIES = 3;
 
 // TODO(vinod): There should be a limit on the retries.
 void StatusUpdateManagerProcess::timeout(const Duration& duration)
@@ -472,7 +473,7 @@ void StatusUpdateManagerProcess::timeout(const Duration& duration)
       CHECK_NOTNULL(stream);
       if (!stream->pending.empty()) {
         CHECK(stream->timeout.isSome());
-        if (stream->timeout.get().expired()) {
+        if (stream->timeout.get().expired() && stream->retries < MAX_RETRIES) {
           const StatusUpdate& update = stream->pending.front();
           LOG(WARNING) << "Resending status update " << update;
 
@@ -481,8 +482,11 @@ void StatusUpdateManagerProcess::timeout(const Duration& duration)
             std::min(duration * 2, STATUS_UPDATE_RETRY_INTERVAL_MAX);
 
           stream->timeout = forward(update, duration_);
+          stream->retries += 1;
+          continue;
         }
       }
+      stream->retries = 0;
     }
   }
 }
