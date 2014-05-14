@@ -361,6 +361,9 @@ protected:
 
   // Remove an offer and optionally rescind the offer as well.
   void removeOffer(Offer* offer, bool rescind = false);
+  
+  void offerTimeout(const OfferID& id);
+  void taskTimeout(const FrameworkID& frameworkId, const TaskID& taskId);
 
   Framework* getFramework(const FrameworkID& frameworkId);
   Slave* getSlave(const SlaveID& slaveId);
@@ -514,6 +517,7 @@ private:
 
   hashmap<OfferID, Offer*> offers;
 
+  multihashmap<FrameworkID, TaskID> stagingTasks;
   hashmap<std::string, Role*> roles;
 
   // Frameworks/slaves that are currently in the process of authentication.

@@ -94,6 +94,10 @@ using memory::shared_ptr;
 
 using namespace mesos::internal::status;
 
+const int OFFER_TIMEOUT = 10; // 10 seconds
+const int OFFER_TIMEOUT_REFUSE = 2*60; // 2 mins
+const int TASK_STAGING_TIMEOUT = 10*60; // 10 mins
+
 namespace mesos {
 namespace internal {
 namespace master {
@@ -2281,6 +2285,8 @@ void Master::launchTask(
 
   slave->addTask(t);
 
+  stagingTasks.put(framework->id, task.task_id());
+
   // Tell the slave to launch the task!
   LOG(INFO) << "Launching task " << task.task_id()
             << " of framework " << framework->id
@@ -3122,6 +3128,7 @@ void Master::statusUpdate(const StatusUpdate& update, const UPID& pid)
   task->add_statuses()->CopyFrom(status);
   task->set_state(status.state());
 
+  stagingTasks.remove(task->framework_id(), task->task_id());
   // Handle the task appropriately if it's terminated.
   if (protobuf::isTerminalState(status.state())) {
     removeTask(task);
@@ -3438,6 +3445,7 @@ void Master::offer(const FrameworkID& frameworkId,
     }
 
     offers[offer->id()] = offer;
+    delay(Seconds(OFFER_TIMEOUT), self(), &Master::offerTimeout, offer->id());
 
     framework->addOffer(offer);
     slave->addOffer(offer);
@@ -4250,6 +4258,7 @@ void Master::removeTask(Task* task)
   // Tell the allocator about the recovered resources.
   allocator->resourcesRecovered(
       task->framework_id(), task->slave_id(), Resources(task->resources()));
+  stagingTasks.remove(task->framework_id(), task->task_id());
 
   // Update the task state metric.
   switch (task->state()) {
@@ -4300,6 +4309,58 @@ void Master::removeOffer(Offer* offer, bool rescind)
   delete offer;
 }
 
+void Master::offerTimeout(const OfferID& id)
+{
+  Offer* offer = getOffer(id);
+  if (NULL == offer) {
+    return;
+  }
+
+  Filters filters;
+  filters.set_refuse_seconds(OFFER_TIMEOUT_REFUSE);
+
+  allocator->resourcesUnused(
+          offer->framework_id(),
+          offer->slave_id(),
+          Resources(offer->resources()),
+          filters);
+
+  removeOffer(offer);;
+}
+
+void Master::taskTimeout(const FrameworkID& frameworkId, const TaskID& taskId)
+{
+  if (!stagingTasks.contains(frameworkId, taskId)) {
+    return;
+  }
+
+  stagingTasks.remove(frameworkId, taskId);
+
+  Framework* framework = getFramework(frameworkId);
+  if (NULL == framework) {
+    return;
+  }
+
+  Task* task = framework->getTask(taskId);
+  if (NULL == task) {
+    return;
+  }
+
+  StatusUpdateMessage message;
+  StatusUpdate* update = message.mutable_update();
+  update->mutable_framework_id()->MergeFrom(frameworkId);
+  update->mutable_executor_id()->MergeFrom(task->executor_id());
+  update->mutable_slave_id()->MergeFrom(task->slave_id());
+  TaskStatus* status = update->mutable_status();
+  status->mutable_task_id()->MergeFrom(taskId);
+  status->set_state(TASK_LOST);
+  status->set_message("Task Staging expired");
+  update->set_timestamp(Clock::now().secs());
+  update->set_uuid(UUID::random().toBytes());
+  send(framework->pid, message);
+  removeTask(task);
+  killTask(framework->pid, frameworkId, taskId);
+}
 
 // TODO(bmahler): Consider killing this.
 Framework* Master::getFramework(const FrameworkID& frameworkId)
